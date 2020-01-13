@@ -1,0 +1,3 @@
+-*- eval: (privacy-filter-mode 1) -*-
+
+Super secret text.
