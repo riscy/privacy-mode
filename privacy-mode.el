@@ -35,21 +35,22 @@
   :link '(emacs-commentary-link :tag "Commentary" "privacy-mode.el"))
 
 (defface privacy-face nil
-  "A dynamically modified face to hide private text."
+  "A dynamically modified face to make private text harder to read."
   :group 'privacy)
 
-(defcustom privacy-amount 8
+(defcustom privacy-percent 8
   "Percent difference between `privacy-face' and the background.
-Setting this to a smaller number makes 'private' text harder to see."
+Setting this to a smaller number makes private text harder to see."
   :type 'integer
   :group 'privacy
   :link '(function-link privacy--update-face))
-(put 'privacy-amount 'safe-local-variable 'integerp)
+(put 'privacy-percent 'safe-local-variable 'integerp)
 
 (defvar-local privacy--font-lock-p nil
   "Whether font-lock-mode was on when the privacy filter was activated.")
 
-(defvar-local privacy--cookie nil)
+(defvar-local privacy--remove-face-cookie nil
+  "Used to remove face remappings using `face-remap-remove-relative'.")
 
 ;;;###autoload
 (define-minor-mode privacy-mode
@@ -59,36 +60,42 @@ Setting this to a smaller number makes 'private' text harder to see."
 
 (defun privacy--enable ()
   "Turn on the privacy filter (disable font-locks, overlays, etc.)."
-  (privacy--unfontify)
-  (privacy--refontify))
+  (privacy--unfontify-buffer)
+  (privacy--refontify-buffer))
 
 (defun privacy--disable ()
   "Turn off the privacy filter and resume font-locking."
   (let ((inhibit-read-only t))
     (with-silent-modifications
-      (face-remap-remove-relative privacy--cookie)
+      (face-remap-remove-relative privacy--remove-face-cookie)
       (when (or privacy--font-lock-p global-font-lock-mode)
         (font-lock-mode 1)))))
 
-(defun privacy--unfontify ()
-  "Unfontify the buffer and inhibit overlays by advising `overlay-put'."
-  (let ((inhibit-read-only t))
-   (with-silent-modifications (set-text-properties (point-min) (point-max) nil)))
-  (dolist (o (overlays-in (point-min) (point-max))) (delete-overlay o))
-  (advice-add #'overlay-put :around #'privacy--inhibit-overlays)
-  (setq-local privacy--font-lock-p font-lock-mode)
-  (font-lock-mode -1))
+(defun privacy--unfontify-buffer (&optional buffer)
+  "Unfontify and inhibit overlays by advising `overlay-put'.
+If BUFFER is nil, use `current-buffer'."
+  (with-current-buffer (or buffer (current-buffer))
+    (let ((inhibit-read-only t))
+      (with-silent-modifications (set-text-properties (point-min) (point-max) nil)))
+    (dolist (o (overlays-in (point-min) (point-max))) (delete-overlay o))
+    ;; idempotently advise overlays from coming back, rather than maintaining an
+    ;; exhaustive list of the minor modes that could possibly be re-adding them:
+    (advice-add #'overlay-put :around #'privacy--inhibit-overlays)
+    (setq-local privacy--font-lock-p font-lock-mode)
+    (font-lock-mode -1)))
 
-(defun privacy--refontify ()
-  "Remap the default face to `privacy-face'.
-That face is adjusted to match the background color."
-  (let ((background (face-attribute 'default :background)))
-    (set-face-foreground 'privacy-face
-     (if (eq (frame-parameter nil 'background-mode) 'dark)
-         (color-lighten-name background privacy-amount)
-       (color-darken-name background privacy-amount))))
-  (setq-local privacy--cookie
-              (face-remap-add-relative 'default 'privacy-face)))
+(defun privacy--refontify-buffer (&optional buffer)
+  "Remap the `default' face to `privacy-face'.
+If BUFFER is nil, use `current-buffer'.  Note `privacy-face' is
+dynamically adjusted to match the current background hue."
+  (with-current-buffer (or buffer (current-buffer))
+    (let ((background (face-attribute 'default :background)))
+      (set-face-foreground 'privacy-face
+                           (if (eq (frame-parameter nil 'background-mode) 'dark)
+                               (color-lighten-name background privacy-percent)
+                             (color-darken-name background privacy-percent))))
+    (setq-local privacy--remove-face-cookie
+                (face-remap-add-relative 'default 'privacy-face))))
 
 (defun privacy--inhibit-overlays (overlay-put-function &rest args)
   "Advice to inhibit OVERLAY-PUT-FUNCTION (invoked with ARGS)."
